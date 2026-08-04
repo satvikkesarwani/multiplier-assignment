@@ -5,6 +5,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
+import subprocess
+import sys
 
 from playwright.async_api import (
     BrowserContext,
@@ -62,6 +64,12 @@ def normalize_url(url: str) -> str:
 
     return urlunparse(parsed)
 
+def is_justdial_url(url: str) -> bool:
+    """Check whether the URL belongs to Justdial."""
+    hostname = (urlparse(url).hostname or "").lower()
+
+    return hostname == "justdial.com" or hostname.endswith(".justdial.com")
+
 
 def get_screenshot_filename(url: str) -> str:
     """
@@ -94,15 +102,19 @@ async def block_unnecessary_resources(route) -> None:
         await route.continue_()
 
 
-async def launch_context(playwright) -> BrowserContext:
+async def launch_context(playwright, url: str) -> BrowserContext:
     """
-    Launch installed Google Chrome when available.
+    Launch Chrome.
 
-    If Chrome is not installed, fall back to Playwright Chromium.
+    Justdial blocks the headless browser configuration, so Justdial URLs are
+    opened in normal visible Chrome. Other websites continue using headless
+    Chrome.
     """
+    justdial = is_justdial_url(url)
+
     common_options = {
         "user_data_dir": str(BROWSER_PROFILE_DIR),
-        "headless": True,
+        "headless": not justdial,
         "viewport": {"width": 1280, "height": 800},
         "screen": {"width": 1280, "height": 800},
         "locale": "en-IN",
@@ -110,19 +122,27 @@ async def launch_context(playwright) -> BrowserContext:
         "ignore_https_errors": True,
         "java_script_enabled": True,
         "color_scheme": "light",
-        "args": [
-            "--disable-dev-shm-usage",
-            "--disable-background-networking",
-            "--disable-background-timer-throttling",
-            "--disable-renderer-backgrounding",
-            "--disable-features=Translate",
-            "--hide-scrollbars",
-            "--mute-audio",
-        ],
+        "args": (
+            ["--start-maximized"]
+            if justdial
+            else [
+                "--disable-dev-shm-usage",
+                "--disable-background-networking",
+                "--disable-background-timer-throttling",
+                "--disable-renderer-backgrounding",
+                "--disable-features=Translate",
+                "--hide-scrollbars",
+                "--mute-audio",
+            ]
+        ),
     }
 
     try:
-        logger.info("Launching installed Google Chrome")
+        logger.info(
+            "Launching installed Google Chrome for %s, headed=%s",
+            url,
+            justdial,
+        )
 
         return await playwright.chromium.launch_persistent_context(
             channel="chrome",
@@ -136,10 +156,10 @@ async def launch_context(playwright) -> BrowserContext:
             chrome_error,
         )
 
+        # Playwright Chromium fallback.
         return await playwright.chromium.launch_persistent_context(
             **common_options,
         )
-
 
 async def prepare_page(page) -> None:
     """Configure headers, timeouts and request handling."""
@@ -208,6 +228,24 @@ async def navigate_and_render(page, url: str) -> None:
 
     await page.wait_for_timeout(700)
 
+async def page_is_access_denied(page) -> bool:
+    """
+    Detect common block/error pages so they are not saved as valid previews.
+    """
+    try:
+        page_text = (await page.locator("body").inner_text(timeout=5_000)).lower()
+    except Exception:
+        return False
+
+    blocked_messages = (
+        "access denied",
+        "request blocked",
+        "you don't have permission to access",
+        "reference #",
+    )
+
+    return any(message in page_text for message in blocked_messages)
+
 
 async def capture_with_playwright(url: str, filepath: Path) -> bool:
     """Capture the URL using local Chrome/Chromium."""
@@ -215,13 +253,19 @@ async def capture_with_playwright(url: str, filepath: Path) -> bool:
 
     try:
         async with async_playwright() as playwright:
-            context = await launch_context(playwright)
+            context = await launch_context(playwright, url)
 
             # Persistent contexts sometimes open an initial blank page.
             page = context.pages[0] if context.pages else await context.new_page()
 
             await prepare_page(page)
             await navigate_and_render(page, url)
+
+            if await page_is_access_denied(page):
+                logger.warning("Access Denied page detected for %s", url)
+                filepath.unlink(missing_ok=True)
+                return False
+
 
             await page.screenshot(
                 path=str(filepath),
@@ -328,6 +372,44 @@ async def take_screenshot(url: str) -> Optional[str]:
 
         if playwright_success:
             return public_path
+
+        # Screenshot APIs are also commonly blocked by Justdial. Do not save their
+        # Access Denied response as a preview.
+        logger.info("Checking if URL is Justdial: %s", normalized_url)
+
+        if is_justdial_url(normalized_url):
+            logger.info("✅ JUSTDIAL DETECTED - Running capture_justdial.py")
+
+            # capture_justdial.py backend folder me hai
+            script_path = APP_DIR.parent / "capture_justdial.py"
+
+            logger.info("Script path: %s", script_path)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script_path),
+                    normalized_url,
+                    str(filepath),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            logger.info("Return code: %s", result.returncode)
+
+            if result.stdout:
+                logger.info("STDOUT:\n%s", result.stdout)
+
+            if result.stderr:
+                logger.error("STDERR:\n%s", result.stderr)
+
+            if result.returncode == 0 and filepath.exists():
+                logger.info("✅ Justdial screenshot created successfully")
+                return public_path
+
+            logger.error("❌ capture_justdial.py failed")
+            return None
 
         logger.warning(
             "Local browser capture failed for %s; trying fallback",

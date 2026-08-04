@@ -44,16 +44,21 @@ async def take_screenshot(url: str) -> Optional[str]:
             
             # Try navigating with a very short timeout and minimal wait criteria
             try:
-                await page.goto(url, wait_until="commit", timeout=12000)
+                # Wait for load event or domcontentloaded with a 20s timeout
+                await page.goto(url, wait_until="load", timeout=20000)
             except Exception as goto_err:
                 print(f"Navigation error (ignored to capture page content): {goto_err}")
+                try:
+                    await page.goto(url, wait_until="commit", timeout=10000)
+                except Exception:
+                    pass
             
             # Wait a small delay for rendering to finish
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
             
-            # Take a screenshot even if the load event did not fully fire
+            # Take a screenshot, passing a high timeout (25s) and ignoring standard font wait blocks if any
             try:
-                await page.screenshot(path=str(filepath), full_page=False, animations="disabled", timeout=10000)
+                await page.screenshot(path=str(filepath), full_page=False, animations="disabled", timeout=25000)
             except Exception as ss_err:
                 print(f"Screenshot capture error: {ss_err}")
             await browser.close()

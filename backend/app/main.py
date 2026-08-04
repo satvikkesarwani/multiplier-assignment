@@ -7,9 +7,13 @@ from app.core.database import engine, Base
 from app.api.auth import router as auth_router
 from app.api.preview import router as preview_router
 
+from app.core.config import settings
+
 # Import models so SQLAlchemy registers them before creating tables
 import app.models.user
 import app.models.preview
+
+
 
 # Create all database tables on startup
 Base.metadata.create_all(bind=engine)
@@ -23,7 +27,7 @@ app = FastAPI(
 # Allow React frontend to communicate with this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite dev server
+    allow_origins=[settings.FRONTEND_ORIGIN],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,21 +1,33 @@
-from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
 
-# --- Request Schemas ---
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 
 class PreviewCreateRequest(BaseModel):
-    url: str  # The URL to generate a preview for
+    url: str = Field(
+        min_length=3,
+        max_length=2048,
+        examples=["https://www.example.com"],
+    )
 
-# --- Response Schemas ---
+    @field_validator("url")
+    @classmethod
+    def clean_url(cls, value: str) -> str:
+        value = value.strip()
+
+        if not value:
+            raise ValueError("URL cannot be empty")
+
+        return value
+
 
 class PreviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     url: str
     screenshot_path: Optional[str] = None
     title: Optional[str] = None
     created_at: datetime
     user_id: int
-
-    class Config:
-        from_attributes = True

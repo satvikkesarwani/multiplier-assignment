@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 from pathlib import Path
 
-URL = "https://www.justdial.com/Hyderabad/Dr-Sarita-Rao-Tx-Hospitals-Near-Masjid-Uppal-Bus-Stand-Bharath-Nagar-Colony-Uppal/040PXX40-XX40-231215200040-Y2E1_BZDET"
+URL = "https://google.com"
 
 # Same hash logic as the main app
 url_hash = hashlib.md5(URL.encode()).hexdigest()

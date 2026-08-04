@@ -10,9 +10,7 @@ function PreviewCard({ preview }) {
   const formattedDate = new Date(preview.created_at).toLocaleString()
 
   // Build the full image URL (screenshot served by FastAPI's /static endpoint)
-  const imageUrl = preview.screenshot_path
-    ? `http://localhost:8002${preview.screenshot_path}`
-    : null
+  const imageUrl = preview.screenshot_path || null
 
   return (
     <div className="preview-card">

@@ -1,78 +1,69 @@
 import asyncio
-import os
 import hashlib
+import urllib.request
 from pathlib import Path
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
 
 # Directory where screenshots will be saved
 SCREENSHOTS_DIR = Path(__file__).parent.parent / "static" / "previews"
 SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def get_screenshot_filename(url: str) -> str:
     """Generate a unique filename from the URL using MD5 hash."""
     url_hash = hashlib.md5(url.encode()).hexdigest()
     return f"{url_hash}.png"
 
+
+def _download_screenshot_sync(url: str, filepath: str) -> bool:
+    """
+    Download a screenshot using thum.io (free screenshot API).
+    Runs synchronously in a thread pool so it doesn't block the async event loop.
+    """
+    # thum.io generates screenshots of any public URL, no API key needed
+    api_url = f"https://image.thum.io/get/width/1280/crop/800/{url}"
+    try:
+        req = urllib.request.Request(
+            api_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; URLPreviewBot/1.0)"}
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            if resp.status == 200:
+                content = resp.read()
+                if len(content) > 1000:  # Must be a real image, not an error page
+                    with open(filepath, "wb") as f:
+                        f.write(content)
+                    print(f"Screenshot saved: {filepath}")
+                    return True
+    except Exception as e:
+        print(f"Screenshot API error for {url}: {e}")
+    return False
+
+
 async def take_screenshot(url: str) -> Optional[str]:
     """
-    Use Playwright (headless browser) to capture a screenshot of the given URL.
+    Capture a screenshot of the given URL using thum.io (free screenshot API).
     Returns the relative path to the saved screenshot, or None if it fails.
     """
     filename = get_screenshot_filename(url)
     filepath = SCREENSHOTS_DIR / filename
-    
-    # Reuse existing screenshot if already captured
-    if filepath.exists():
-        return f"/static/previews/{filename}"
-    
-    try:
-        from playwright.async_api import async_playwright
-        
-        async with async_playwright() as p:
-            # Launch Chromium with disabled HTTP/2
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--disable-http2"]
-            )
-            # Use custom context options (User Agent, bypass HTTP/2 errors if any)
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 800},
-                ignore_https_errors=True
-            )
-            page = await context.new_page()
-            
-            # Try navigating with a very short timeout and minimal wait criteria
-            try:
-                # Wait for load event or domcontentloaded with a 20s timeout
-                await page.goto(url, wait_until="commit", timeout=15000)
-            except Exception as goto_err:
-                print(f"Navigation error (ignored to capture page content): {goto_err}")
-            
-            # Inject CSS to override and block custom font downloading/waiting
-            try:
-                await page.add_style_tag(content="* { font-family: system-ui, sans-serif !important; }")
-            except Exception:
-                pass
 
-            # Wait a small delay for rendering to finish
-            await asyncio.sleep(3)
-            
-            # Take a screenshot, passing a high timeout (25s) and ignoring standard font wait blocks if any
-            try:
-                # Use a timeout parameter on the screenshot to bypass font wait loops
-                await page.screenshot(path=str(filepath), full_page=False, animations="disabled", timeout=8000)
-            except Exception as ss_err:
-                print(f"Screenshot capture error: {ss_err}")
-                # Fallback to screenshot without animations constraint if it failed
-                try:
-                    await page.screenshot(path=str(filepath), full_page=False, timeout=8000)
-                except Exception as final_err:
-                    print(f"Final screenshot fallback failed: {final_err}")
-            await browser.close()
-        
+    # Reuse cached screenshot if already captured and is a valid file
+    if filepath.exists() and filepath.stat().st_size > 1000:
+        print(f"Reusing cached screenshot: {filepath}")
         return f"/static/previews/{filename}"
-    
-    except Exception as e:
-        print(f"Screenshot failed for {url}: {e}")
-        return None
+
+    # Run the blocking HTTP download in a thread pool (keeps FastAPI async-safe)
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        success = await loop.run_in_executor(
+            executor, _download_screenshot_sync, url, str(filepath)
+        )
+
+    # Only return the path if the file was actually created
+    if success and filepath.exists() and filepath.stat().st_size > 1000:
+        return f"/static/previews/{filename}"
+
+    print(f"Screenshot not available for: {url}")
+    return None

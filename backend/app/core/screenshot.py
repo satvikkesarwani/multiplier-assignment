@@ -45,22 +45,30 @@ async def take_screenshot(url: str) -> Optional[str]:
             # Try navigating with a very short timeout and minimal wait criteria
             try:
                 # Wait for load event or domcontentloaded with a 20s timeout
-                await page.goto(url, wait_until="load", timeout=20000)
+                await page.goto(url, wait_until="commit", timeout=15000)
             except Exception as goto_err:
                 print(f"Navigation error (ignored to capture page content): {goto_err}")
-                try:
-                    await page.goto(url, wait_until="commit", timeout=10000)
-                except Exception:
-                    pass
             
+            # Inject CSS to override and block custom font downloading/waiting
+            try:
+                await page.add_style_tag(content="* { font-family: system-ui, sans-serif !important; }")
+            except Exception:
+                pass
+
             # Wait a small delay for rendering to finish
-            await asyncio.sleep(4)
+            await asyncio.sleep(3)
             
             # Take a screenshot, passing a high timeout (25s) and ignoring standard font wait blocks if any
             try:
-                await page.screenshot(path=str(filepath), full_page=False, animations="disabled", timeout=25000)
+                # Use a timeout parameter on the screenshot to bypass font wait loops
+                await page.screenshot(path=str(filepath), full_page=False, animations="disabled", timeout=8000)
             except Exception as ss_err:
                 print(f"Screenshot capture error: {ss_err}")
+                # Fallback to screenshot without animations constraint if it failed
+                try:
+                    await page.screenshot(path=str(filepath), full_page=False, timeout=8000)
+                except Exception as final_err:
+                    print(f"Final screenshot fallback failed: {final_err}")
             await browser.close()
         
         return f"/static/previews/{filename}"
